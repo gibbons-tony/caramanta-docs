@@ -4,203 +4,250 @@ sidebar_position: 1
 
 # Forecast Agent
 
-The Forecast Agent is the machine learning forecasting engine for Ground Truth, delivering probabilistic price predictions for coffee and sugar futures through a PySpark-based model framework.
+The Forecast Agent is Ground Truth's machine learning forecasting engine, generating probabilistic 14-day price predictions for coffee and sugar futures through an evolved PySpark framework.
 
-## Overview
+## Mission
 
-The Forecast Agent uses the ml_lib PySpark framework to generate 14-day forecasts with 2,000 Monte Carlo paths per prediction. It implements a "fit many, publish few" strategy: test 200+ model configurations, then backfill and publish only the top ~15 diverse models.
+Generate accurate, production-ready commodity price forecasts with 2,000 Monte Carlo paths per prediction, evolving from 24-48 hour backfills to minutes through architectural innovation.
 
-**Output**: `commodity.forecast.distributions` (2,000 paths) and `commodity.forecast.point_forecasts` (mean, median, quantiles)
+## The Evolution: 180x Speedup
 
-## Key Achievement: 180x Speedup Evolution
+Three architectural iterations drove dramatic performance improvements:
 
-**V1: Retrain-Per-Forecast** (24-48 hours)
-- Train model for every forecast date
-- Sequential processing
-- No persistence
+### V1: Retrain-Per-Forecast (Baseline - Never Implemented)
+- **Approach**: Train model fresh for every forecast date
+- **Model trainings**: 2,875 for 2018-2024 backfill
+- **Data loading**: 79,560 rows per forecast (entire history)
+- **Total time**: 24-48 hours
+- **Problem**: Redundant computation, massive data loading
 
-**V2: Train-Once/Inference-Many** (1-2 hours)
-- Train once, predict many dates
-- Model persistence to DBFS
-- 180x faster than V1
+### V2: Train-Once/Inference-Many (Nov-Dec 2024)
+- **Innovation**: Periodic training with model persistence
+- **Model trainings**: 16 semiannual windows (180x reduction)
+- **Data loading**: 90 rows per forecast (880x reduction)
+- **Total time**: 1-2 hours (24x faster)
+- **Storage**: JSON (<1MB) or S3 (≥1MB)
+- **Status**: Production → Deprecated Dec 2024
 
-**V3: ml_lib + Gold Tables** (minutes)
-- 90% fewer rows (7,612 vs 75,000)
-- forecast_testing schema for safe experimentation
-- "Fit many, publish few" compute savings
+### V3: ml_lib + Gold Tables (Current - Dec 2024)
+- **Innovation**: "Fit many, publish few" + 90% data reduction
+- **Data**: 7,612 gold rows vs 75,000 silver (10x faster loading)
+- **Testing**: forecast_testing schema for safe experimentation
+- **Selection**: SQL-based selection of top ~15 from 200+ configs
+- **Compute savings**: 93% (4,800 → 360 hours)
+- **Status**: Current production architecture
 
-**Result**: From days to minutes through architectural evolution
-
-## Model Suite
-
-### Implemented Models
-
-| Model Family | Implementation | Use Case |
-|:------------|:---------------|:---------|
-| **Statistical** | ARIMA, SARIMAX | Seasonal patterns, weather/FX exogenous variables |
-| **Prophet** | Prophet (additive/multiplicative) | Holiday effects, trend changes |
-| **Tree-Based** | XGBoost | Feature interactions, non-linear relationships |
-| **Baseline** | Random Walk | Benchmark comparison |
-
-**Coffee**: 10 real models (sarimax_auto_weather_v1, prophet_v1, xgboost_weather_v1, etc.)
-**Sugar**: 5 real models (sarimax_auto_weather_v1, prophet_v1, xgboost_weather_v1, arima_auto_v1, random_walk_v1)
+**Result**: From days to minutes through iterative architectural improvements.
 
 ## "Fit Many, Publish Few" Strategy
 
-### Problem
-Fitting 200+ configurations and publishing all would create testing explosion for Trading Agent (testing 200 forecasts is impractical).
+**Problem**: If we fit 200+ model configurations and publish all, the Trading Agent would need to test 200 forecasts → combinatorial explosion.
 
-### Solution: Three-Phase Approach
+**Solution**: Three-phase workflow
 
-**Phase 1: Experiment** (commodity.forecast_testing)
+### Phase 1: Experiment (commodity.forecast_testing)
 - Test 200+ model configurations
-- Vary hyperparameters, exogenous features
-- Safe isolated schema
+- Vary hyperparameters: SARIMAX orders, Prophet seasonality, XGBoost depth
+- Vary features: price-only, +weather, +GDELT, +both
+- Safe isolated schema (won't pollute production)
 
-**Phase 2: Evaluate**
-- Measure directional accuracy (DA), MAE, stability
-- SQL-based selection criteria
-- Select top ~15 diverse models
+### Phase 2: Evaluate (SQL-based selection)
+- **Primary metrics**: DA > 0.60, MAE < $5.00
+- **Diversity requirements**:
+  - Mix of model types (SARIMAX, Prophet, XGBoost, Random Walk)
+  - Mix of feature sets (price-only vs weather-enhanced)
+  - Mix of horizons (day 1-3 vs day 7 vs day 14 optimized)
+- **Output**: Top ~15 diverse models
 
-**Phase 3: Backfill & Publish** (commodity.forecast)
-- Backfill only selected 15 models
-- Compute savings: 4,800 hours → 360 hours (93% reduction)
-- Trading Agent tests curated set of 15, not 200
+### Phase 3: Backfill & Publish (commodity.forecast)
+- Backfill only selected 15 models (not all 200)
+- **Compute savings**: 200 models × 24 hours = 4,800 hours → 15 models × 24 hours = 360 hours (93% reduction)
+- Trading Agent receives curated set of 15 (manageable for multi-model backtesting)
 
-## Architecture
+## ml_lib Framework
 
-### Data Sources
+Modern PySpark ML pipeline with Estimator/Transformer patterns:
 
-The Forecast Agent consumes gold tables from the Research Agent:
+### Core Components
 
-**Production**: `commodity.gold.unified_data`
-- Forward-filled features (no NULLs)
-- 7,612 rows (Coffee + Sugar, 2015-2024)
-- Ready for immediate use
+**GoldDataLoader**
+- Load `commodity.gold.unified_data` (production) or `commodity.gold.unified_data_raw` (experimental)
+- Filter by commodity, date range
+- Returns PySpark DataFrame
 
-**Experimental**: `commodity.gold.unified_data_raw`
-- NULLs preserved (~30% market data, ~73% GDELT)
-- Requires `ImputationTransformer` from ml_lib
-- For testing custom imputation strategies
+**ImputationTransformer**
+- 4 strategies: `forward_fill`, `mean_7d`, `zero`, `keep_null`
+- Per-feature configuration via wildcard patterns (`*_usd`, `gdelt_*`)
+- Date-conditional strategies (GDELT pre/post 2021)
+- **Critical**: `rowsBetween(unboundedPreceding, 0)` prevents data leakage
 
-### Testing Schema
+**TimeSeriesForecastCV**
+- Cross-validation framework for time series
+- Walk-forward validation
+- 5-fold splits with non-overlapping test periods
 
-`commodity.forecast_testing.*` - Isolated experimentation:
-- distributions
-- point_forecasts
-- model_metadata
-- validation_results
+**Model Implementations**
+- SARIMAX - Auto-tuned with exogenous variables (weather, FX)
+- Prophet - Additive/multiplicative seasonality, holiday effects
+- XGBoost - Tree-based with feature engineering
+- ARIMA - Classical time series
+- Random Walk - Baseline benchmark
 
-Test configurations here before promoting to production (`commodity.forecast.*`)
+### Performance Optimizations
 
-### ml_lib Framework
-
-**Key Components**:
-
-1. **GoldDataLoader** - Load production or experimental tables
-2. **ImputationTransformer** - 4 imputation strategies (forward-fill, mean, median, zero)
-3. **TimeSeriesForecastCV** - Cross-validation framework
-4. **Model Implementations** - SARIMAX, Prophet, XGBoost, ARIMA, Random Walk
-
-**Example Usage**:
+**Caching**: After imputation, cache DataFrame for 2-3x speedup across CV folds
 ```python
-from forecast_agent.ml_lib.cross_validation.data_loader import GoldDataLoader
-
-loader = GoldDataLoader()  # Defaults to unified_data
-df = loader.load(commodity='Coffee')
-
-# Or use raw table with imputation
-loader_raw = GoldDataLoader(table_name='commodity.gold.unified_data_raw')
-df_raw = loader_raw.load(commodity='Coffee')
+df_imputed = imputer.transform(df_raw)
+df_imputed.cache()  # Avoids recomputing window functions
+df_imputed.count()  # Materialize
 ```
+
+**Array Operations**: Use `aggregate()` SQL function instead of exploding arrays (faster)
+```python
+# Aggregate weather across 67 regions
+expr("aggregate(weather_data, 0.0, (acc, w) -> acc + w.temp_mean_c) / size(weather_data)")
+```
+
+## Model Suite
+
+### Production Models
+
+**Coffee** (10 real models):
+- sarimax_auto_weather_v1 (MAE: $3.10, DA: 69.5%)
+- prophet_v1
+- xgboost_weather_v1
+- arima_auto_v1
+- random_walk_v1
+- ... (5 more configurations)
+
+**Sugar** (5 real models):
+- sarimax_auto_weather_v1
+- prophet_v1
+- xgboost_weather_v1
+- arima_auto_v1
+- random_walk_v1
+
+### Model Families
+
+| Family | Models | Strengths | Exogenous Variables |
+|:-------|:-------|:----------|:-------------------|
+| **Statistical** | ARIMA, SARIMAX | Seasonal patterns, autocorrelation | Weather, FX, VIX |
+| **Prophet** | Prophet | Holiday effects, trend changes | N/A (built-in) |
+| **Tree-Based** | XGBoost | Non-linear relationships | Weather, GDELT, FX |
+| **Baseline** | Random Walk | Benchmark comparison | N/A |
+
+## Data Sources
+
+### Production Table: `commodity.gold.unified_data`
+- **All features forward-filled** (no NULLs)
+- **7,612 rows** (Coffee + Sugar, 2015-2024)
+- **Use for**: Stable, proven models
+- **Example**: SARIMAX production model
+
+### Experimental Table: `commodity.gold.unified_data_raw`
+- **Only `close` forward-filled** (features preserve NULLs)
+- **NULL rates**: ~30% market data (weekends), ~73% GDELT (no news)
+- **Requires**: ImputationTransformer
+- **Use for**: Testing imputation strategies, XGBoost (handles NULLs natively)
+
+## Testing Schema Isolation
+
+**commodity.forecast_testing.*** mirrors production but isolated:
+- `distributions` - 2,000 MC paths
+- `point_forecasts` - Mean, median, quantiles
+- `model_metadata` - Performance metrics
+- `validation_results` - Cross-validation outcomes
+- `selected_for_publication` - SQL selection results
+
+**Workflow**:
+1. Fit 200+ configs in testing schema
+2. Query `model_metadata` for metrics
+3. Run SQL selection (top ~15 diverse models)
+4. Validate selected models
+5. Backfill selected models only
+6. Promote to production (`commodity.forecast.*`)
 
 ## Forecast Output
 
-All tables in `commodity.forecast` schema:
+### commodity.forecast.distributions
+2,000 Monte Carlo simulation paths per forecast
+- **Columns**: forecast_date, commodity, region, model_name, path_id, day_1...day_14, actual_close
+- **Use**: Trading Agent risk analysis, uncertainty quantification
 
-### `commodity.forecast.distributions`
-- 2,000 Monte Carlo paths per forecast
-- Columns: forecast_date, commodity, region, model_name, path_id, day_1...day_14, actual_close
-- Used by Trading Agent for risk analysis
+### commodity.forecast.point_forecasts
+14-day forecasts with prediction intervals
+- **Columns**: forecast_date, commodity, region, model_name, day_1...day_14, actual_close
+- **Computed**: Mean, median, 10th/90th percentiles from distributions
 
-### `commodity.forecast.point_forecasts`
-- 14-day forecasts with prediction intervals
-- Columns: forecast_date, commodity, region, model_name, day_1...day_14, actual_close
-- Mean, median, quantiles computed from distributions
-
-### `commodity.forecast.model_metadata`
-- Model performance metrics
-- Columns: model_name, commodity, MAE, RMSE, Dir Day0 (directional accuracy)
-- Tracks which models are deployed
+### commodity.forecast.model_metadata
+Model performance tracking
+- **Columns**: model_name, commodity, MAE, RMSE, Dir Day0 (directional accuracy)
+- **Use**: Model selection, performance monitoring
 
 ## Key Metrics
 
-**MAE** (Mean Absolute Error): Average prediction error in dollars
-**RMSE** (Root Mean Squared Error): Penalizes large errors
-**Dir Day0**: Directional accuracy from day 0 - measures if day i > day 0 (trading signal quality)
+**MAE** (Mean Absolute Error): Average prediction error in dollars (e.g., $3.10 for SARIMAX+Weather)
 
-**Metric tracked in**: `commodity.forecast.model_metadata` table
+**RMSE** (Root Mean Squared Error): Penalizes large errors more than MAE
+
+**Dir Day0** (Critical for Trading): Directional accuracy from day 0 → Measures if day i > day 0 (trading signal quality, not just day-to-day changes)
+
+**Production Benchmark**: SARIMAX+Weather achieves MAE $3.10, Dir Day0 69.5%
 
 ## Key Innovations
 
-### 1. Gold Table Integration
+### 1. Train-Once/Inference-Many Pattern
 
-**Innovation**: 90% row reduction through array-based regional data
+**Before**: Retrain model for every forecast date → 2,875 trainings
+**After**: Train semiannually, reuse models → 16 trainings (180x reduction)
+**Impact**: 24-48 hours → 1-2 hours
 
-**Impact**:
-- 7,612 rows vs 75,000 (faster model training)
-- Flexible NULL handling (production vs experimental)
-- Simplified data grain
+### 2. Gold Table Integration
 
-### 2. Testing Schema Isolation
+**Before**: 75,000 silver rows with manual regional aggregation
+**After**: 7,612 gold rows with array-based weather/GDELT
+**Impact**: 10x faster data loading, cleaner code
 
-**Innovation**: Separate `commodity.forecast_testing` schema for safe experimentation
+### 3. Testing Schema Isolation
 
-**Impact**:
-- Test 200+ configs without polluting production
-- SQL-based model selection
-- Clean promotion workflow
+**Before**: Testing new models risked polluting production
+**After**: commodity.forecast_testing schema for safe experiments
+**Impact**: Freedom to test 200+ configs without production impact
 
-### 3. "Fit Many, Publish Few"
+### 4. "Fit Many, Publish Few"
 
-**Innovation**: Comprehensive testing, selective backfilling
+**Before**: Fit 10 models, publish all 10 → Trading Agent tests 10
+**After**: Fit 200 models, select top 15, publish 15 → Trading Agent tests curated 15
+**Impact**: 93% compute savings, manageable for Trading Agent
 
-**Impact**:
-- 93% compute savings (4,800 → 360 hours)
-- Trading Agent tests curated 15 models, not 200
-- Freedom to experiment without production impact
+## Model Persistence Strategy
 
-## Implementation Patterns
+**Small models (<1MB)**: JSON in database
+- Naive, Random Walk, ARIMA
+- Fast save/load, no external dependencies
 
-### Baseline Model
-Simple moving average and trend-based forecasts as benchmarks.
+**Large models (≥1MB)**: S3 storage
+- XGBoost, SARIMAX with many parameters
+- Efficient for large serialized objects
+- Requires AWS credentials
 
-### Linear Models
-SARIMAX with exogenous variables (weather, economic indicators).
-
-### Tree-Based Models
-XGBoost and LightGBM with feature engineering.
-
-### Deep Learning
-LSTM and Temporal Fusion Transformer (TFT) for complex patterns.
-
-### Multi-Horizon
-Forecast 1, 7, 14, and 30 days ahead simultaneously.
+**Training frequency**: Semiannual (optimal cost/performance balance)
 
 ## Documentation
 
 For detailed implementation:
 - **Architecture**: [ARCHITECTURE.md](https://github.com/gibbonstony/ucberkeley-capstone/blob/main/forecast_agent/docs/ARCHITECTURE.md)
-- **Spark Backfill Guide**: [SPARK_BACKFILL_GUIDE.md](https://github.com/gibbonstony/ucberkeley-capstone/blob/main/forecast_agent/docs/SPARK_BACKFILL_GUIDE.md)
-- **Model Patterns**: Review model implementations in `/ml_lib/models/`
+- **Evolution Story**: [FORECASTING_EVOLUTION.md](https://github.com/gibbonstony/ucberkeley-capstone/blob/main/forecast_agent/docs/FORECASTING_EVOLUTION.md)
+- **ml_lib Quickstart**: [QUICKSTART.md](https://github.com/gibbonstony/ucberkeley-capstone/blob/main/forecast_agent/ml_lib/QUICKSTART.md)
 
 ## Code Repository
 
 📂 **[View Forecast Agent Code on GitHub](https://github.com/gibbonstony/ucberkeley-capstone/tree/main/forecast_agent)**
 
-Explore the complete implementation including:
-- 15+ model implementations
-- Spark parallelization patterns
-- Model persistence layer
-- Forecast manifest system
-- Backtesting framework
+## Impact
+
+The Forecast Agent's architectural evolution enabled:
+- **180x speedup**: V1 baseline (24-48h) → V2 (1-2h) → V3 (minutes)
+- **93% compute savings**: Fit 200, publish 15 (not all 200)
+- **Trading Agent**: Receives curated set of 15 diverse, validated models
+- **All Agents**: Production-grade forecasts with 2,000 MC paths for risk analysis
