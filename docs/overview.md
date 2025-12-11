@@ -46,24 +46,31 @@ graph LR
 
 ### [Research Agent](/docs/research-agent/introduction)
 **Data collection and ETL pipeline**
-- 6 AWS Lambda functions (market, weather, VIX, FX, CFTC, GDELT)
+- 11 AWS Lambda functions (5 data fetchers + 6 GDELT pipeline)
+  - Data fetchers: market, weather, VIX, FX, CFTC
+  - GDELT pipeline: discovery, bronze transform, csv-bronze-direct, silver backfill, silver discovery, silver transform
 - EventBridge daily triggers (2AM UTC)
 - Bronze → Gold medallion architecture on Databricks
-- 7,612 rows (Coffee + Sugar, daily from 2015-07-07)
+- 61 weather regions (25 Coffee + 20 Sugar Cane + 16 Sugar Beet)
+- 40 FX currency pairs (15 FRED + 25 World Bank)
 - [📂 View Code on GitHub →](https://github.com/gibbonstony/ucberkeley-capstone/tree/main/research_agent)
 
 ### [Forecast Agent](/docs/forecast-agent/introduction)
 **Machine learning forecasting engine**
 - ml_lib PySpark framework with gold table integration
-- Models: SARIMAX, Prophet, XGBoost, ARIMA, Random Walk
-- 14-day forecasts with 2,000 Monte Carlo paths
-- Testing schema (forecast_testing) for safe experimentation
+- Models: Naive, Linear Regression (Simple, Ridge, LASSO, ElasticNet)
+- Transformers: Imputation (4 strategies), Weather (3 aggregation types), GDELT (2 aggregation types)
+- Cross-validation: Walk-forward time-series CV with directional accuracy metric
+- 14-day forecasts with 2,000 Monte Carlo paths (simulation framework)
 - [📂 View Code on GitHub →](https://github.com/gibbonstony/ucberkeley-capstone/tree/main/forecast_agent)
 
 ### [Trading Agent](/docs/trading-agent/introduction)
 **Strategy optimization and execution**
-- 9 trading strategies (4 baseline + 5 prediction-based)
-- Multi-model backtesting framework
+- 10 trading strategies (4 baseline + 5 prediction-based + 1 MPC)
+  - Baseline: ImmediateSale, EqualBatch, PriceThreshold, MovingAverage
+  - Predictive: PriceThresholdPredictive, MovingAveragePredictive, ExpectedValue, Consensus, RiskAdjusted
+  - Optimization: RollingHorizonMPC (linear programming)
+- Multi-model backtesting framework (2,172 lines of runner code)
 - WhatsApp integration for daily recommendations
 - Multi-currency support (15+ currencies including COP)
 - [📂 View Code on GitHub →](https://github.com/gibbonstony/ucberkeley-capstone/tree/main/trading_agent)
@@ -74,7 +81,7 @@ graph LR
 |:------|:------------|
 | **Data Platform** | Databricks, Delta Lake, Unity Catalog, PySpark |
 | **Cloud Infrastructure** | AWS Lambda, S3, EventBridge |
-| **ML Frameworks** | statsmodels (SARIMAX, ARIMA), Prophet, XGBoost |
+| **ML Frameworks** | PySpark ML (LinearRegression), scikit-learn patterns |
 | **Analysis** | NumPy, Pandas, SciPy |
 | **Deployment** | Python 3.11+, Git, Databricks Workflows |
 
@@ -88,17 +95,6 @@ Explore the [Forecast Agent documentation](/docs/forecast-agent/introduction) fo
 
 ### For Traders
 Review the [Trading Agent documentation](/docs/trading-agent/introduction) for trading strategies and optimization approaches.
-
-## Project Timeline
-
-| Phase | Duration | Lead | Deliverables |
-|:------|:---------|:-----|:-------------|
-| **Research & Planning** | Weeks 1-2 | All | Project scope, data sources, architecture design |
-| **Data Infrastructure** | Weeks 3-6 | Stuart | Bronze→Gold pipeline, 6 Lambda functions |
-| **ML Model Development** | Weeks 7-11 | Connor | ml_lib framework, model implementations |
-| **Trading Strategies** | Weeks 9-13 | Francisco, Tony | 9 strategies, multi-model backtesting |
-| **Integration & Testing** | Weeks 12-14 | All | End-to-end system, validation |
-| **Production Deployment** | Week 15 | Tony | Daily recommendations, WhatsApp integration |
 
 ## Resources
 

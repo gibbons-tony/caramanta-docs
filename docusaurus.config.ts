@@ -12,10 +12,10 @@ const config: Config = {
   },
 
   url: 'https://gibbons-tony.github.io',
-  baseUrl: '/caramanta-docs/',
+  baseUrl: '/groundtruth-docs/',
 
   organizationName: 'gibbons-tony',
-  projectName: 'caramanta-docs',
+  projectName: 'groundtruth-docs',
 
   onBrokenLinks: 'throw',
   onBrokenMarkdownLinks: 'warn',
